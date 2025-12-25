@@ -27,7 +27,7 @@
 
 ## 🤖 Попробовать бота
 
-Найти бота в Telegram: [@QuizIT_Bot](https://t.me/quiz_mj_bot)
+Найти бота в Telegram: [@QuizBotM](https://t.me/quiz_mj_bot)
 
 
 ---
