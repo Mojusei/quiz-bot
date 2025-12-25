@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 
 from config import settings
 from database.engine import init_db
-from bot.handlers import start, quiz
+from bot.handlers import start, quiz, stats
 
 
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +19,7 @@ async def main():
 
     dp.include_router(start.router)
     dp.include_router(quiz.router)
+    dp.include_router(stats.router)
 
     await dp.start_polling(bot)
 

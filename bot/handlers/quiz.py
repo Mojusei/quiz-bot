@@ -1,52 +1,86 @@
 # bot/handlers/quiz.py
-from aiogram import Router, F, types
+from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
 
 from database.crud import get_quiz_index, update_quiz_index
+from database.engine import AsyncSessionLocal
 from bot.keyboards import generate_options_keyboard
 from quiz_data import quiz_data
-
+from models.quiz import QuizResult, QuizState
 
 router = Router()
 
 
-@router.callback_query(F.data == "right_answer")
-async def right_answer(callback: CallbackQuery):
+@router.callback_query(F.data.startswith("answer_"))
+async def handle_answer(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer("Верно!")
+
+    chosen_index = int(callback.data.split("_", maxsplit=1)[1])
 
     async with AsyncSessionLocal() as session:
-        current = await get_quiz_index(session, callback.from_user.id)
-        await update_quiz_index(session, callback.from_user.id, current + 1)
+        state = await session.get(QuizState, callback.from_user.id)
+        if state is None:
+            state = QuizState(
+                user_id=callback.from_user.id,
+                question_index=0,
+                correct_answers=0
+            )
+            session.add(state)
+            await session.commit()
+            await session.refresh(state)
 
-    if current + 1 < len(quiz_data):
-        await send_question(callback.message, callback.from_user.id)
+        current_index = state.question_index
+
+        # Защита от несогласованности (на всякий случай)
+        if current_index >= len(quiz_data):
+            await callback.message.answer("Квиз уже завершён.")
+            return
+
+        # Получаем данные вопроса
+        question = quiz_data[current_index]
+        correct_index = question["correct_option"]
+        chosen_text = question["options"][chosen_index]
+        correct_text = question["options"][correct_index]
+        is_correct = (chosen_index == correct_index)
+
+        # Обновляем счётчик правильных ответов
+        if is_correct:
+            state.correct_answers += 1
+
+        # Переходим к следующему вопросу (или завершаем)
+        state.question_index = current_index + 1
+        await session.commit()
+
+    # Отправляем пользователю его выбор и результат
+    if is_correct:
+        result_text = "✅ Верно!"
     else:
-        await callback.message.answer("Квиз завершён!")
+        result_text = f"❌ Неверно.\nПравильный ответ: {correct_text}"
 
-
-@router.callback_query(F.data == "wrong_answer")
-async def wrong_answer(callback: CallbackQuery):
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    async with AsyncSessionLocal() as session:
-        current = await get_quiz_index(session, callback.from_user.id)
-
-    correct_text = (
-        quiz_data[current]["options"][quiz_data[current]["correct_option"]]
-    )
     await callback.message.answer(
-        f"Неправильно. Правильный ответ: {correct_text}"
-        )
+        f"Ваш ответ: {chosen_text}\n\n{result_text}"
+    )
 
-    async with AsyncSessionLocal() as session:
-        await update_quiz_index(session, callback.from_user.id, current + 1)
+    # Проверяем завершение квиза
+    if current_index + 1 >= len(quiz_data):
+        async with AsyncSessionLocal() as session:
+            # Получаем актуальное состояние (с финальным счётом)
+            final_state = await session.get(QuizState, callback.from_user.id)
+            if final_state:
+                # Сохраняем результат прохождения
+                result = QuizResult(
+                    user_id=callback.from_user.id,
+                    correct_answers=final_state.correct_answers,
+                    total_questions=len(quiz_data)
+                )
+                session.add(result)
+                await session.commit()
 
-    if current + 1 < len(quiz_data):
-        await send_question(callback.message, callback.from_user.id)
+        await callback.message.answer("🎉 Квиз завершён! Спасибо за участие.")
     else:
-        await callback.message.answer("Квиз завершён!")
+        # Переходим к следующему вопросу
+        await send_question(callback.message, callback.from_user.id)
 
 
 async def send_question(message: Message, user_id: int):
